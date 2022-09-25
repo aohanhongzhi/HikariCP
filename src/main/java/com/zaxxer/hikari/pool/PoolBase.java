@@ -154,7 +154,10 @@ abstract class PoolBase
             final var validationSeconds = (int) Math.max(1000L, validationTimeout) / 1000;
 
             if (isUseJdbc4Validation) {
-               return !connection.isValid(validationSeconds);
+               logger.info("Jdbc 验证 Validation start...,validationSeconds={}",validationSeconds);
+               boolean valid = connection.isValid(validationSeconds);
+               logger.info("Jdbc 验证 Validation result isValid={}",valid);
+               return !valid;
             }
 
             try (var statement = connection.createStatement()) {
@@ -162,7 +165,9 @@ abstract class PoolBase
                   setQueryTimeout(statement, validationSeconds);
                }
 
-               statement.execute(config.getConnectionTestQuery());
+               String connectionTestQuery = config.getConnectionTestQuery();
+               logger.info("开始执行测试语句 {}",connectionTestQuery);
+               statement.execute(connectionTestQuery);
             }
          }
          finally {
@@ -178,7 +183,7 @@ abstract class PoolBase
       catch (Exception e) {
          lastConnectionFailure.set(e);
          logger.warn("{} - Failed to validate connection {} ({}). Possibly consider using a shorter maxLifetime value.",
-                     poolName, connection, e.getMessage());
+                     poolName, connection, e.getMessage(),e);
          return true;
       }
    }
