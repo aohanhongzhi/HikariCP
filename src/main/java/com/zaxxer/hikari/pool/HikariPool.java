@@ -156,6 +156,8 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
       suspendResumeLock.acquire();
       final var startTime = currentTime();
 
+      logger.info("======>Starting connection to databases... {}",startTime);
+
       String message = "获取连接开始状态";
 
       try {
@@ -167,7 +169,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
                logger.error("{}", message);
                break; // We timed out... break and throw exception
             }else{
-               logger.info("从数据库连接池里获取到了连接 {} , {}", poolEntry,poolEntry.connection);
+               logger.info("从数据库连接池里获取到了连接 {} , {} 下面验证连接有效性", poolEntry,poolEntry.connection);
             }
 
             final var now = currentTime();
@@ -182,7 +184,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
             } else {
                metricsTracker.recordBorrowStats(poolEntry, startTime);
                Connection proxyConnection = poolEntry.createProxyConnection(leakTaskFactory.schedule(poolEntry));
-               logger.info("成功获取到的有效连接 Proxy connection: " + proxyConnection);
+               logger.info("<======成功获取到的有效连接 Proxy connection: " + proxyConnection);
                return proxyConnection;
             }
          } while (timeout > 0L);
@@ -698,7 +700,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
       if (originalException instanceof SQLException) {
          sqlState = ((SQLException) originalException).getSQLState();
       }
-      final var connectionException = new SQLTransientConnectionException(message +
+      final var connectionException = new SQLTransientConnectionException(message + "-" +
          poolName + " - Connection is not available, request timed out after " + elapsedMillis(startTime) + "ms " +
             "(total=" + getTotalConnections() + ", active=" + getActiveConnections() + ", idle=" + getIdleConnections() + ", waiting=" + getThreadsAwaitingConnection() + ")",
          sqlState, originalException);
