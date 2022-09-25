@@ -177,13 +177,15 @@ abstract class PoolBase
                connection.rollback();
             }
          }
-
+         // 没有发生异常就会返回false
          return false;
       }
       catch (Exception e) {
          lastConnectionFailure.set(e);
+         // maxLifetime定义了一个无效连接的最大存活时间，源码中定义了一个定时器线程周期性检查连接是否正在使用，如果没有就回收掉。
          logger.warn("{} - Failed to validate connection {} ({}). Possibly consider using a shorter maxLifetime value.",
                      poolName, connection, e.getMessage(),e);
+         // 发生异常就会返回 true
          return true;
       }
    }
