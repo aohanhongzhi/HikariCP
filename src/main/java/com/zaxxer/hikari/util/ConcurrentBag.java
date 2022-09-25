@@ -148,6 +148,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          timeout = timeUnit.toNanos(timeout);
          do {
             final var start = currentTime();
+            // 这段代码非常关键的，它就是在数据库挂掉的情况下，会产生一些耗时的地方。它在这里使用了JUC的java.util.concurrent.SynchronousQueue。
             final T bagEntry = handoffQueue.poll(timeout, NANOSECONDS);
             if (bagEntry == null || bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
                return bagEntry;
