@@ -109,6 +109,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    }
 
    /**
+    * 这个方式是借一个连接封装对象出来。requite()方法是归还一个连接封装对象
     * The method will borrow a BagEntry from the bag, blocking for the
     * specified timeout if none are available.
     *
@@ -119,7 +120,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
     */
    public T borrow(long timeout, final TimeUnit timeUnit) throws InterruptedException
    {
-      // Try the thread-local list first
+      // Try the thread-local list first 当前线程的数据库连接缓存看看有木有，这个是在 requite()方法的时候缓存的。
       final var list = threadList.get();
       for (int i = list.size() - 1; i >= 0; i--) {
          final var entry = list.remove(i);
@@ -130,7 +131,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          }
       }
 
-      // Otherwise, scan the shared list ... then poll the handoff queue
+      // Otherwise, scan the shared list ... then poll the handoff queue 上面从本地线程找不到，就扫描下整个可出借的连接表
       final int waiting = waiters.incrementAndGet();
       try {
          for (T bagEntry : sharedList) {
@@ -143,6 +144,9 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
             }
          }
 
+         // 如果代码执行到这里了，那么说明池里面的数据库连接都没有可用的，就会开始下面的等待别人释放或者新建资源，从而获取。
+
+         // 通知新建资源包
          listener.addBagItem(waiting);
 
          timeout = timeUnit.toNanos(timeout);
@@ -164,7 +168,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   /**
+   /** requite()方法是归还一个连接封装对象
     * This method will return a borrowed object to the bag.  Objects
     * that are borrowed from the bag but never "requited" will result
     * in a memory leak.
@@ -175,8 +179,10 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
     */
    public void requite(final T bagEntry)
    {
+      // 连接对象归还了，所以状态置为“没有使用”
       bagEntry.setState(STATE_NOT_IN_USE);
 
+//      判断是否存在等待线程，若存在，则直接转手资源
       for (var i = 0; waiters.get() > 0; i++) {
          if (bagEntry.getState() != STATE_NOT_IN_USE || handoffQueue.offer(bagEntry)) {
             return;
@@ -189,6 +195,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          }
       }
 
+      // 否则 归还的时候，将连接放到本地线程ThreadLocal的缓存里
       final var threadLocalList = threadList.get();
       if (threadLocalList.size() < 50) {
          threadLocalList.add(weakThreadLocals ? new WeakReference<>(bagEntry) : bagEntry);
