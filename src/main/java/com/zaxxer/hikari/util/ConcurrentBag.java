@@ -168,7 +168,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   /** requite()方法是归还一个连接封装对象
+   /** requite()方法是归还一个连接封装对象，不是关闭物理连接
     * This method will return a borrowed object to the bag.  Objects
     * that are borrowed from the bag but never "requited" will result
     * in a memory leak.
@@ -223,6 +223,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    }
 
    /**
+    *  移除是直接关闭物理连接？
     * Remove a value from the bag.  This method should only be called
     * with objects obtained by <code>borrow(long, TimeUnit)</code> or <code>reserve(T)</code>
     *
@@ -238,11 +239,13 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          return false;
       }
 
+      // 直接从list里移除物理连接
       final boolean removed = sharedList.remove(bagEntry);
       if (!removed && !closed) {
          LOGGER.warn("Attempt to remove an object from the bag that does not exist: {}", bagEntry);
       }
 
+      // 当前线程的本地缓存移除物理连接记录，怎么关闭物理连接的呢？
       threadList.get().remove(bagEntry);
 
       return removed;
@@ -380,6 +383,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    }
 
    /**
+    *  使用弱引用
     * Determine whether to use WeakReferences based on whether there is a
     * custom ClassLoader implementation sitting between this class and the
     * System ClassLoader.
