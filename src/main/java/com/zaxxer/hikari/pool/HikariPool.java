@@ -40,6 +40,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static com.zaxxer.hikari.util.ClockSource.*;
+import static com.zaxxer.hikari.util.ClockSource.currentTime;
 import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_IN_USE;
 import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_NOT_IN_USE;
 import static com.zaxxer.hikari.util.UtilityElf.*;
@@ -156,33 +157,46 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
       suspendResumeLock.acquire();
       final var startTime = currentTime();
 
+      logger.info("======>Starting connection to databases... {}，超时时间: {}",startTime,hardTimeout);
+
+      String message = "获取连接开始状态";
+
       try {
          var timeout = hardTimeout;
          do {
+            // 从连接池获取连接对象
             var poolEntry = connectionBag.borrow(timeout, MILLISECONDS);
             if (poolEntry == null) {
+               message = "没有获取到连接池的连接！所以要抛出异常了，与超时(" + hardTimeout + ")无关了。";
+               logger.error("{}", message);
                break; // We timed out... break and throw exception
             }
 
             final var now = currentTime();
-            if (poolEntry.isMarkedEvicted() || (elapsedMillis(poolEntry.lastAccessed, now) > aliveBypassWindowMs && isConnectionDead(poolEntry.connection))) {
+            boolean connectionDead = isConnectionDead(poolEntry.connection);
+            logger.info("从数据库连接池里获取到了连接 {} , {} 下面验证连接有效性 Evicated:{} ,elapsedMillis: {}  isConnectionDead={}", poolEntry,poolEntry.connection,poolEntry.isMarkedEvicted(),elapsedMillis(poolEntry.lastAccessed, currentTime()) > aliveBypassWindowMs,connectionDead);
+
+            if (poolEntry.isMarkedEvicted() || (elapsedMillis(poolEntry.lastAccessed, now) > aliveBypassWindowMs && connectionDead)) {
                closeConnection(poolEntry, poolEntry.isMarkedEvicted() ? EVICTED_CONNECTION_MESSAGE : DEAD_CONNECTION_MESSAGE);
                timeout = hardTimeout - elapsedMillis(startTime);
-            }
-            else {
+               if (timeout<=0){
+                  message = "连接是有的且无效，但是获取连接超时了";
+               }
+            } else {
                metricsTracker.recordBorrowStats(poolEntry, startTime);
-               return poolEntry.createProxyConnection(leakTaskFactory.schedule(poolEntry));
+               Connection proxyConnection = poolEntry.createProxyConnection(leakTaskFactory.schedule(poolEntry));
+               logger.info("<======成功获取到的有效连接 Proxy connection: " + proxyConnection);
+               return proxyConnection;
             }
          } while (timeout > 0L);
 
          metricsTracker.recordBorrowTimeoutStats(startTime);
-         throw createTimeoutException(startTime);
-      }
-      catch (InterruptedException e) {
+         logger.error("当前设置的超时时间是{}，剩余时间 {}，后面抛出异常", hardTimeout, timeout);
+         throw createTimeoutException(startTime, message);
+      } catch (InterruptedException e) {
          Thread.currentThread().interrupt();
          throw new SQLException(poolName + " - Interrupted during connection acquisition", e);
-      }
-      finally {
+      } finally {
          suspendResumeLock.release();
       }
    }
@@ -319,7 +333,9 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    //                        IBagStateListener callback
    // ***********************************************************************
 
-   /** {@inheritDoc} */
+   /**
+    * 创建物理连接对象
+    *  {@inheritDoc} */
    @Override
    public void addBagItem(final int waiting)
    {
@@ -409,6 +425,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    }
 
    /**
+    * 归还连接对象，不是关闭物理连接
     * Recycle PoolEntry (add back to the pool)
     *
     * @param poolEntry the PoolEntry to recycle
@@ -418,10 +435,11 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    {
       metricsTracker.recordConnectionUsage(poolEntry);
 
+      // 归还连接，不是关闭物理连接
       connectionBag.requite(poolEntry);
    }
 
-   /**
+   /** 关闭物理连接
     * Permanently close the real (underlying) connection (eat any exception).
     *
     * @param poolEntry poolEntry having the connection to close
@@ -429,6 +447,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
     */
    void closeConnection(final PoolEntry poolEntry, final String closureReason)
    {
+      logger.info("Closing connection " + poolEntry + " " + closureReason);
       if (connectionBag.remove(poolEntry)) {
          final var connection = poolEntry.close();
          closeConnectionExecutor.execute(() -> {
@@ -465,6 +484,8 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
             // variance up to 2.5% of the maxlifetime
             final var variance = maxLifetime > 10_000 ? ThreadLocalRandom.current().nextLong( maxLifetime / 40 ) : 0;
             final var lifetime = maxLifetime - variance;
+            logger.info("配置的连接最大生存时间 Max lifetime: " + maxLifetime + " 周期执行时间 lifetime= " + lifetime);
+//            注册一个执行一次的延时任务，在连接存活将要到达maxLifetime之前触发evit，关闭数据库物理连接，用来防止出现大面积的connection因maxLifetime同一时刻失效。
             poolEntry.setFutureEol(houseKeepingExecutorService.schedule(new MaxLifetimeTask(poolEntry), lifetime, MILLISECONDS));
          }
 
@@ -600,8 +621,11 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
     */
    private boolean softEvictConnection(final PoolEntry poolEntry, final String reason, final boolean owner)
    {
+      // 标记为驱逐
       poolEntry.markEvicted();
-      if (owner || connectionBag.reserve(poolEntry)) {
+      boolean reserve = connectionBag.reserve(poolEntry);
+      logger.info("决定是否关闭连接 owner = {}，reserve = {},reason[{}]",owner,reserve,reason);
+      if (owner || reserve) {
          closeConnection(poolEntry, reason);
          return true;
       }
@@ -672,7 +696,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
     * @param startTime the start time (timestamp) of the acquisition attempt
     * @return a SQLException to be thrown from {@link #getConnection()}
     */
-   private SQLException createTimeoutException(long startTime)
+   private SQLException createTimeoutException(long startTime,String message)
    {
       logPoolState("Timeout failure ");
       metricsTracker.recordConnectionTimeout();
@@ -682,7 +706,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
       if (originalException instanceof SQLException) {
          sqlState = ((SQLException) originalException).getSQLState();
       }
-      final var connectionException = new SQLTransientConnectionException(
+      final var connectionException = new SQLTransientConnectionException(message + "-" +
          poolName + " - Connection is not available, request timed out after " + elapsedMillis(startTime) + "ms " +
             "(total=" + getTotalConnections() + ", active=" + getActiveConnections() + ", idle=" + getIdleConnections() + ", waiting=" + getThreadsAwaitingConnection() + ")",
          sqlState, originalException);
@@ -700,6 +724,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
 
    /**
     * Creating and adding poolEntries (connections) to the pool.
+    * 创建物理连接
     */
    private final class PoolEntryCreator implements Callable<Boolean>
    {
@@ -755,6 +780,8 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
        * @return true if we should create a connection, false if the need has disappeared
        */
       private synchronized boolean shouldContinueCreating() {
+
+         // 两个条件，1.连接池状态正常。 2.HikariCP连接数计算规则
          return poolState == POOL_NORMAL && getTotalConnections() < config.getMaximumPoolSize() &&
             (getIdleConnections() < config.getMinimumIdle() || connectionBag.getWaitingThreadCount() > getIdleConnections());
       }
@@ -834,6 +861,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
 
       public void run()
       {
+         logger.info("MaxLifetime 时间到了 ,poolEntry {}", poolEntry.connection);
          if (softEvictConnection(poolEntry, "(connection has passed maxLifetime)", false /* not owner */)) {
             addBagItem(connectionBag.getWaitingThreadCount());
          }
