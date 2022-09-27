@@ -125,6 +125,10 @@ abstract class PoolBase
    //                           JDBC methods
    // ***********************************************************************
 
+   /** Jdbc物理连接的关闭
+    * @param connection
+    * @param closureReason
+    */
    void quietlyCloseConnection(final Connection connection, final String closureReason)
    {
       if (connection != null) {

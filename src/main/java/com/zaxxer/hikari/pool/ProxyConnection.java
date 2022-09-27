@@ -234,7 +234,11 @@ public abstract class ProxyConnection implements Connection
    //              "Overridden" java.sql.Connection Methods
    // **********************************************************************
 
-   /** {@inheritDoc} */
+   /**
+    *
+    * 这里就归还连接的开始，并不是关闭物理连接。
+    *
+    * {@inheritDoc} */
    @Override
    public final void close() throws SQLException
    {
@@ -264,6 +268,7 @@ public abstract class ProxyConnection implements Connection
          }
          finally {
             delegate = ClosedConnection.CLOSED_CONNECTION;
+            // 接着归换连接
             poolEntry.recycle();
          }
       }

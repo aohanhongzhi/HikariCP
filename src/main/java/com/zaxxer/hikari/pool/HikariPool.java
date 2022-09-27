@@ -333,7 +333,9 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    //                        IBagStateListener callback
    // ***********************************************************************
 
-   /** {@inheritDoc} */
+   /**
+    * 创建物理连接对象
+    *  {@inheritDoc} */
    @Override
    public void addBagItem(final int waiting)
    {
@@ -423,6 +425,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    }
 
    /**
+    * 归还连接对象，不是关闭物理连接
     * Recycle PoolEntry (add back to the pool)
     *
     * @param poolEntry the PoolEntry to recycle
@@ -432,10 +435,11 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    {
       metricsTracker.recordConnectionUsage(poolEntry);
 
+      // 归还连接，不是关闭物理连接
       connectionBag.requite(poolEntry);
    }
 
-   /**
+   /** 关闭物理连接
     * Permanently close the real (underlying) connection (eat any exception).
     *
     * @param poolEntry poolEntry having the connection to close
@@ -481,7 +485,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
             final var variance = maxLifetime > 10_000 ? ThreadLocalRandom.current().nextLong( maxLifetime / 40 ) : 0;
             final var lifetime = maxLifetime - variance;
             logger.info("配置的连接最大生存时间 Max lifetime: " + maxLifetime + " 周期执行时间 lifetime= " + lifetime);
-//            注册一个执行一次的延时任务，在连接存活将要到达maxLifetime之前触发evit，用来防止出现大面积的connection因maxLifetime同一时刻失效。
+//            注册一个执行一次的延时任务，在连接存活将要到达maxLifetime之前触发evit，关闭数据库物理连接，用来防止出现大面积的connection因maxLifetime同一时刻失效。
             poolEntry.setFutureEol(houseKeepingExecutorService.schedule(new MaxLifetimeTask(poolEntry), lifetime, MILLISECONDS));
          }
 

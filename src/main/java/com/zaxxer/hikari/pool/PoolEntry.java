@@ -31,7 +31,7 @@ import static com.zaxxer.hikari.util.ClockSource.currentTime;
 
 /**
  * Entry used in the ConcurrentBag to track Connection instances.
- *
+ * 封装物理连接的对象
  * @author Brett Wooldridge
  */
 final class PoolEntry implements IConcurrentBagEntry
